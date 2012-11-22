@@ -328,9 +328,11 @@ struct process_data
 	// e.g. "1=60\n2=45\n3=180\n"
 	int cmd_idx;
 	char cmd_str[NUM_SERVOS * 10];
+	char* cmd_next;		// Points to start of command being built up.
+	char* cmd_reader;	// Tracks the incoming command chars.
 };
 
-// kmalloc the temporary data required for each user:
+// kmalloc the temporary data required for each user and initialise:
 static int dev_open(struct inode *inod,struct file *fil)
 {
 	fil->private_data = kmalloc( sizeof(struct process_data), GFP_KERNEL );
@@ -339,7 +341,13 @@ static int dev_open(struct inode *inod,struct file *fil)
 		printk(KERN_WARNING "ServoBlaster: Failed to allocate user data\n");
 		return -ENOMEM;
 	}
-	memset(fil->private_data, 0, sizeof(struct process_data));
+
+	{
+		struct process_data* const pdata = fil->private_data;
+		memset(pdata, 0, sizeof(struct process_data));
+		pdata->cmd_next = pdata->cmd_str;
+		pdata->cmd_reader = pdata->cmd_next;
+	}
 	return 0;
 }
 
@@ -445,6 +453,8 @@ static ssize_t dev_write(struct file *filp,const char *buf,size_t count,loff_t *
 {
 	struct process_data* const pdata = filp->private_data;
 	if (0 == pdata) return 0;
+//	char* cmd_next;		// Points to start of command being built up.
+//	char* cmd_reader;	// Tracks the incoming command chars.
 
 	{
 		static const int max_idx = sizeof(pdata->cmd_str) - 1;
@@ -455,6 +465,21 @@ static ssize_t dev_write(struct file *filp,const char *buf,size_t count,loff_t *
 			return -EFAULT;
 		}
 		*idx+=count;
+		
+		while (pdata->cmd_reader != &(pdata->cmd_str[*idx]) )
+		{
+			if ('\n' == *(pdata->cmd_reader))
+			{
+				*(pdata->cmd_reader) = 0;
+				//if ((pdata->cmd_reader - pdata->cmd_next) > 1)
+				{
+					printk(KERN_DEBUG "ServoBlaster: Command %s\n", pdata->cmd_next);
+					(void)process_command_string(pdata->cmd_next);
+				}
+				pdata->cmd_next = pdata->cmd_reader;
+			}
+			++(pdata->cmd_reader);			
+		}
 	}
 
 	return count;
